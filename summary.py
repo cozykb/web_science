@@ -28,7 +28,7 @@ class Preprocess:
         self.clean_item_data = self.__clean_item_data()
         self.ui_matrix = self.__ui_matrix_training()
 
-    class Predection:
+    class Prediction:
         def __init__(self, uid, iid, est):
             self.uid = uid
             self.iid = iid
@@ -158,20 +158,20 @@ class Collaborativefiltering_recommendation(Preprocess):
 
 
 class Evaluation(Preprocess):
-    def __init__(self, predection_list, ui_df, item_df):
+    def __init__(self, prediction_list, ui_df, item_df):
         super().__init__(ui_df, item_df)
-        self.predection_list = predection_list
+        self.prediction_list = prediction_list
         self.clean_pred_list = self.__clean_pred_list()
         self.ui_relevant_matrix = self.__ui_relevant_matrix()
 
     def __clean_pred_list(self):
-        user_in_prediction = set([pred.uid for pred in self.predection_list])
+        user_in_prediction = set([pred.uid for pred in self.prediction_list])
         users_in_pred_but_not_in_test = list(
             user_in_prediction.difference(set(self.test_data['reviewerID'])))
         out_list = []
-        for i, name in enumerate(self.predection_list):
+        for i, name in enumerate(self.prediction_list):
             if name.uid not in users_in_pred_but_not_in_test:
-                out_list.append(self.predection_list[i])
+                out_list.append(self.prediction_list[i])
         # print(len(out_list))
         return out_list
 
@@ -250,7 +250,7 @@ class Evaluation(Preprocess):
         num_users = len(self.ui_relevant_matrix.index)
         summation = []
         user_item_rating = defaultdict(list)
-        for pred in self.predection_list:
+        for pred in self.prediction_list:
             user_item_rating[pred.uid].append((pred.iid, pred.est))
         for user_id, filted_pred_list in user_item_rating.items():
             filted_pred_list.sort(key=lambda x: x[1], reverse=True)
@@ -260,7 +260,7 @@ class Evaluation(Preprocess):
 
     def rank_k(self,uid:str,rank:int)-> list:
         user_item_rating = defaultdict(list)
-        for pred in self.predection_list:
+        for pred in self.prediction_list:
             user_item_rating[pred.uid].append((pred.iid, pred.est))
         for user_id, filted_pred_list in user_item_rating.items():
             filted_pred_list.sort(key=lambda x: x[1], reverse=True)
@@ -311,9 +311,9 @@ class Contentbased_recommendation(Preprocess):
                 vector_list.append(self.tfidf.loc[item,:].to_numpy())
             return vector_list
     
-    def predection(self):
+    def prediction(self):
         x = lambda bools: True if bools == False else False
-        predection_list = []
+        prediction_list = []
         # print(user_list)
         # chick_1 = 0
         for uid in set(self.training_data['reviewerID']):
@@ -323,10 +323,10 @@ class Contentbased_recommendation(Preprocess):
             vector_not_in = self.pick_item_from_tfidf(item_not_in)
             cos_sim = cosine_similarity(vector_not_in,[self.user_mean_vector[uid]])
             for i,item in enumerate(item_not_in):
-                predection_list.append(self.Predection(uid=uid, iid=item, est=cos_sim[i]))
+                prediction_list.append(self.Prediction(uid=uid, iid=item, est=cos_sim[i]))
         # print(chick_1)
-        # print(len(predection_list))
-        return predection_list
+        # print(len(prediction_list))
+        return prediction_list
 
 if __name__ == '__main__':
     import gzip
@@ -348,8 +348,8 @@ if __name__ == '__main__':
     df_1 = getDF('All_Beauty_5.json.gz')
     df_2 = pd.read_json('meta_All_Beauty.json', lines=True)
     preprocess = Contentbased_recommendation(ui_df=df_1, item_df=df_2)
-    predicetion_list = preprocess.predection()
-    evaluation = Evaluation(predicetion_list, df_1, df_2)
+    prediction_list = preprocess.prediction()
+    evaluation = Evaluation(prediction_list, df_1, df_2)
     kr_mean = evaluation.mean_k(5, 'hr_k')
     print(evaluation.rank_k(uid='A39WWMBA0299ZF',rank=20))
     print(kr_mean)
