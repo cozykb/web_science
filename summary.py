@@ -73,6 +73,8 @@ class Preprocess:
 
 
 class Collaborativefiltering_recommendation(Preprocess):
+    def __init__(self, ui_df, item_df):
+        super().__init__(ui_df, item_df)
 
     def cos_sim_ui(self, user_id: str, item_id: str):
         cosine_similarities = cosine_similarity(np.array(
@@ -163,8 +165,8 @@ class Collaborativefiltering_recommendation(Preprocess):
 
 
 class Evaluation(Preprocess):
-    def __init__(self, predection_list):
-        super().__init__()
+    def __init__(self, predection_list, ui_df, item_df):
+        super().__init__(ui_df, item_df)
         self.predection_list = predection_list
         self.clean_pred_list = self.__clean_pred_list()
         self.ui_relevant_matrix = self.__ui_relevant_matrix()
@@ -267,11 +269,12 @@ class Evaluation(Preprocess):
 
 
 class Contentbased_recommendation(Preprocess):
-    def __init__(self):
-        super().__init__()
-        self.tfidf = self.__tfidf()
+
+    def __init__(self, ui_df, item_df):
+        super().__init__(ui_df, item_df)
         self.original_title = list(self.clean_item_data['title'])
         self.clean_title = self.__clean_title()
+        self.tfidf = self.__tfidf()
 
     def __clean_title(self):
         porter_stemmer = PorterStemmer()
@@ -288,6 +291,14 @@ class Contentbased_recommendation(Preprocess):
         x = tfidf_vectorizer.fit_transform(self.clean_title)
         return pd.DataFrame(x.toarray(), columns=tfidf_vectorizer.get_feature_names_out(), index=self.clean_item_data['asin'])
 
+    def user_mean_vector(self):
+        for uid in self.training_data['reviewerID']:
+            item_in = self.clean_item_data['asin'][self.clean_item_data['asin'].isin(
+                self.training_data[self.training_data['reviewerID'] == uid]['asin'])]
+            for item in item_in:
+                pass
+        pass
+
     def __predection(self):
         def x(bools): return True if bools == False else False
         for uid in self.training_data['reviewerID']:
@@ -295,3 +306,28 @@ class Contentbased_recommendation(Preprocess):
                 self.training_data[self.training_data['reviewerID'] == uid]['asin'])]
             item_not_in = self.clean_item_data['asin'][[x(bools) for bools in self.clean_item_data['asin'].isin(
                 self.training_data[self.training_data['reviewerID'] == uid]['asin'])]]
+
+
+if __name__ == '__main__':
+    import gzip
+    import os
+    import json
+    import re
+    import pandas as pd
+
+    def getDF(path):
+        def parse(path):
+            g = gzip.open(path, 'rb')
+            for l in g:
+                yield json.loads(l)
+        i = 0
+        df = {}
+        for d in parse(path):
+            df[i] = d
+            i += 1
+        return pd.DataFrame.from_dict(df, orient='index')
+
+    df_1 = getDF('All_Beauty_5.json.gz')
+    df_2 = pd.read_json('meta_All_Beauty.json', lines=True)
+    preprocess = Contentbased_recommendation(ui_df=df_1, item_df=df_2)
+    print(preprocess.test_data)
