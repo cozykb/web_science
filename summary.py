@@ -1,3 +1,7 @@
+import gzip
+import json
+import pandas as pd
+import os.path
 from nltk.tokenize.treebank import TreebankWordDetokenizer
 from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.stem import PorterStemmer
@@ -13,12 +17,30 @@ from surprise.model_selection import GridSearchCV
 from surprise import KNNWithMeans
 from collections import defaultdict
 from sklearn.feature_extraction.text import TfidfVectorizer
+import gensim.downloader
 
 
 import nltk
 nltk.download('punkt')
 nltk.download('stopwords')
 
+def ini():
+    assert os.path.exists('All_Beauty_5.json.gz') and os.path.exists('meta_All_Beauty.json'), 'no such files'
+    def getDF(path):
+        def parse(path):
+            g = gzip.open(path, 'rb')
+            for l in g:
+                yield json.loads(l)
+        i = 0
+        df = {}
+        for d in parse(path):
+            df[i] = d
+            i += 1
+        return pd.DataFrame.from_dict(df, orient='index')
+
+    df_1 = getDF('All_Beauty_5.json.gz')
+    df_2 = pd.read_json('meta_All_Beauty.json', lines=True)
+    return df_1, df_2
 
 class Preprocess:
     def __init__(self, ui_df: pd.DataFrame, item_df: pd.DataFrame):
@@ -258,30 +280,33 @@ class Evaluation(Preprocess):
                              cut_off))
         return sum(summation)/float(num_users)
 
-    def rank_k(self,uid:str,rank:int)-> list:
+    def rank_k(self)->dict:
         user_item_rating = defaultdict(list)
         for pred in self.prediction_list:
             user_item_rating[pred.uid].append((pred.iid, pred.est))
         for user_id, filted_pred_list in user_item_rating.items():
             filted_pred_list.sort(key=lambda x: x[1], reverse=True)
-        return user_item_rating[uid][:rank]
+        return user_item_rating
 
 
 class Contentbased_recommendation(Preprocess):
 
-    def __init__(self, ui_df, item_df):
+    def __init__(self, ui_df, item_df, word2vec:bool=False):
         super().__init__(ui_df, item_df)
         self.original_title = list(self.clean_item_data['title'])
         self.clean_title = self.__clean_title()
-        self.tfidf = self.__tfidf()
+        if word2vec:
+            self.tfidf = self.__tfidf_by_word2vec()
+        else:
+            self.tfidf = self.__tfidf()
         self.user_mean_vector = self.__user_mean_vector()
 
     def __clean_title(self):
         porter_stemmer = PorterStemmer()
         title_list = []
         for title in self.original_title:
-            filter_list = [porter_stemmer.stem(word) for word in word_tokenize(
-                title) if word not in stopwords.words("english")]
+            filter_list = [porter_stemmer.stem(word.lower()) for word in word_tokenize(
+                title) if word not in stopwords.words("english") and word.isalpha()]
             title_list.append(
                 TreebankWordDetokenizer().detokenize(filter_list))
         return title_list
@@ -328,6 +353,23 @@ class Contentbased_recommendation(Preprocess):
         # print(len(prediction_list))
         return prediction_list
 
+    def __tfidf_by_word2vec(self):
+        word2vec_vectors = gensim.downloader.load('word2vec-google-news-300')
+        sentences = [list(word_tokenize(title)) for title in self.clean_title]
+        vector_list = []
+        for sentence in sentences:
+            vector = np.zeros((300,))
+            for word in sentence:
+                try:
+                    vector += word2vec_vectors[word]
+                except KeyError :
+                    continue
+            vector_list.append(vector/len(sentence))
+        return pd.DataFrame(np.array(vector_list),index=self.clean_item_data['asin'])
+
+
+
+
 if __name__ == '__main__':
     import gzip
     import json
@@ -351,5 +393,5 @@ if __name__ == '__main__':
     prediction_list = preprocess.prediction()
     evaluation = Evaluation(prediction_list, df_1, df_2)
     kr_mean = evaluation.mean_k(5, 'hr_k')
-    print(evaluation.rank_k(uid='A39WWMBA0299ZF',rank=20))
+    print(evaluation.rank_k()['A39WWMBA0299ZF'][:5])
     print(kr_mean)
