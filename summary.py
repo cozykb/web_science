@@ -13,6 +13,7 @@ from scipy.sparse.linalg import svds
 from surprise import Reader
 from surprise import Dataset
 from surprise import SVD
+import surprise
 from surprise.model_selection import GridSearchCV
 from surprise import KNNWithMeans
 from collections import defaultdict
@@ -24,22 +25,22 @@ import nltk
 nltk.download('punkt')
 nltk.download('stopwords')
 
-def ini():
-    assert os.path.exists('All_Beauty_5.json.gz') and os.path.exists('meta_All_Beauty.json'), 'no such files'
-    def getDF(path):
-        def parse(path):
-            g = gzip.open(path, 'rb')
-            for l in g:
-                yield json.loads(l)
-        i = 0
-        df = {}
-        for d in parse(path):
-            df[i] = d
-            i += 1
-        return pd.DataFrame.from_dict(df, orient='index')
+def ini(path_1, path_2):
+    assert os.path.exists(path_1) and os.path.exists(path_2), 'no such files'
+    # def getDF(path):
+    #     def parse(path):
+    #         g = gzip.open(path, 'rb')
+    #         for l in g:
+    #             yield json.loads(l)
+    #     i = 0
+    #     df = {}
+    #     for d in parse(path):
+    #         df[i] = d
+    #         i += 1
+    #     return pd.DataFrame.from_dict(df, orient='index')
 
-    df_1 = getDF('All_Beauty_5.json.gz')
-    df_2 = pd.read_json('meta_All_Beauty.json', lines=True)
+    df_1 = pd.read_json(path_1, lines=True)
+    df_2 = pd.read_json(path_2, lines=True)
     return df_1, df_2
 
 class Preprocess:
@@ -97,6 +98,9 @@ class Preprocess:
 class Collaborativefiltering_recommendation(Preprocess):
     def __init__(self, ui_df, item_df):
         super().__init__(ui_df, item_df)
+        reader = Reader(rating_scale=(1, 5))
+        self.surprice_training = Dataset.load_from_df(
+            self.training_data[['reviewerID', 'asin', 'overall']], reader=reader)
 
     def cos_sim_ui(self, user_id: str, item_id: str):
         cosine_similarities = cosine_similarity(np.array(
@@ -139,44 +143,47 @@ class Collaborativefiltering_recommendation(Preprocess):
                 item_factors.loc[:, item_id]))
         return prediction
 
-    def gridsearch(self, method: str, search_array: list, measures_method=['rmse'], cv_num=3):
-        reader = Reader(rating_scale=(1, 5))
-        training = Dataset.load_from_df(
-            self.training_data[['reviewerID', 'asin', 'overall']], reader=reader)
+    def gridsearch(self, method: str,measures_method=['rmse'], cv_num=3, kwarg_dic:dict=None):
+        training = self.surprice_training
         assert method == 'knn' or method == 'svd', 'method isn\'t knn or svd'
         if method == 'knn':
-            param_grid = {'k': search_array,
-                          'sim_options': {'name': ['cosine'],
+            if kwarg_dic == None:
+                param_grid = {'k': [1, 5, 10, 15],
+                          'sim_options': {'name': ['msd', 'cosine', 'pearson', 'pearson_baseline'],
                                           # compute  similarities between items
                                           'user_based': [True]
                                           }
                           }
+            else:
+                param_grid = kwarg_dic
             gs = GridSearchCV(KNNWithMeans, param_grid,
-                              measures=measures_method, cv=cv_num)
+                              measures=measures_method, cv=cv_num, n_jobs=-1)
         if method == 'svd':
-            param_grid = {'n_epochs': search_array, 'n_factors': [30]}
+            if kwarg_dic == None:
+                param_grid = {'n_epochs': [100, 200, 500], 'n_factors': [10, 30 ,50]}
+            else:
+                param_grid = kwarg_dic
             gs = GridSearchCV(
-                SVD, param_grid, measures=measures_method, cv=cv_num)
-        return gs.fit(training)
+                SVD, param_grid, measures=measures_method, cv=cv_num, n_jobs=-1)
+        gs.fit(training)
+        return gs
 
     def knn(self, k=10, sim_options={'name': 'cosine', 'user_based': True}):
-        reader = Reader(rating_scale=(1, 5))
-        training = Dataset.load_from_df(
-            self.training_data[['reviewerID', 'asin', 'overall']], reader=reader)
+        training = self.surprice_training
         trainset = training.build_full_trainset()
         testset = trainset.build_anti_testset()
         model = KNNWithMeans(k=k, sim_options=sim_options)
-        return model.fit(trainset).test(testset)
+        model.fit(trainset).test(testset)
+        return model
 
     def svd(self, n_epochs=500, n_factors=30, random_state=0):
-        reader = Reader(rating_scale=(1, 5))
-        training = Dataset.load_from_df(
-            self.training_data[['reviewerID', 'asin', 'overall']], reader=reader)
+        training = self.surprice_training
         trainset = training.build_full_trainset()
         testset = trainset.build_anti_testset()
         model = SVD(n_epochs=n_epochs, n_factors=n_factors,
                     random_state=random_state)
-        return model.fit(trainset).test(testset)
+        model.fit(trainset).test(testset)
+        return model
 
 
 class Evaluation(Preprocess):
@@ -280,7 +287,7 @@ class Evaluation(Preprocess):
                              cut_off))
         return sum(summation)/float(num_users)
 
-    def rank_k(self)->dict:
+    def rank_k(self)->dict:#{uid:filted_pred_list}
         user_item_rating = defaultdict(list)
         for pred in self.prediction_list:
             user_item_rating[pred.uid].append((pred.iid, pred.est))
@@ -288,6 +295,8 @@ class Evaluation(Preprocess):
             filted_pred_list.sort(key=lambda x: x[1], reverse=True)
         return user_item_rating
 
+    def rmse(self):
+        return surprise.accuracy.rmse(self.prediction_list)
 
 class Contentbased_recommendation(Preprocess):
 
@@ -367,7 +376,11 @@ class Contentbased_recommendation(Preprocess):
             vector_list.append(vector/len(sentence))
         return pd.DataFrame(np.array(vector_list),index=self.clean_item_data['asin'])
 
-
+class Hybridrecommender_system(Collaborativefiltering_recommendation, Contentbased_recommendation):
+    def __init__(self, ui_df, item_df):
+        super().__init__(ui_df, item_df)
+    
+    # def 
 
 
 if __name__ == '__main__':
