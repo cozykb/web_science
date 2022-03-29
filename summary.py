@@ -35,6 +35,9 @@ nltk.download('stopwords')
 
 
 def ini(path_1, path_2):
+    # ini function is used to create the pandas Dataframe according to the input json files.
+    # it allows the input in form *.json and *.gz
+    # Make sure the input files are in the same directory as this file, or enter the correct absolute location
     assert os.path.exists(path_1) and os.path.exists(path_2), 'no such files'
 
     def getDF(path):
@@ -60,6 +63,13 @@ def ini(path_1, path_2):
 
 
 class Preprocess:
+    # this class is used to clean and split the data into training and test set
+    # you need to initial the class with user item Dataframe and meta Dataframe
+    # self.ui_df is the original user item Dataframe
+    # self.item_df is the original meta item Dataframe
+    # self.training_data is the training set and self.test_data is the test set, these data sets are made with cleaned data
+    # self.clean_item_data is the cleaned meta item Data
+    # self.ui_matrix is the user-item matrix according to training set
     def __init__(self, ui_df: pd.DataFrame, item_df: pd.DataFrame):
         self.ui_df = ui_df
         self.item_df = item_df
@@ -68,12 +78,20 @@ class Preprocess:
         self.ui_matrix = self.__ui_matrix_training()
 
     class Prediction:
+        # this class is used to form a standard prediction list for further evaluation
+        # self.uid is the user ID
+        # self.iid is the item ID
+        # self.est is the prediction rating score
         def __init__(self, uid, iid, est):
             self.uid = uid
             self.iid = iid
             self.est = est
 
     def __split_ui_data(self):
+        # this private function is used to clean and split the data
+        # Sort by review time, delete data rows without ratings, and remove duplicate
+        # for each user, find the data with the latest rating score >= 4, extract this data to form the test set
+        # remain data will be the training set
         df = self.ui_df.sort_values(
             by=['reviewerID', 'asin', 'unixReviewTime'])
         cleaned_dataset = df.dropna(subset=['overall']).drop_duplicates(
@@ -88,6 +106,10 @@ class Preprocess:
         return training_data, test_data
 
     def __clean_item_data(self):
+        # this private function is used to clean meta data
+        # sort the data among 'asin'
+        # remove duplicate
+        # keep the items inside test set and the training set
         df = self.item_df
         df = df.sort_values(by=['asin'])
         clean_dataset_item = df.drop_duplicates(
@@ -123,7 +145,6 @@ class Preprocess:
             rate = list(self.training_data.overall)[row_i]
             if reviewerID in list(user_list) and asin in list(item_list):
                 matrix.loc[reviewerID, asin] = rate
-        matrix = matrix.fillna(0)
         return matrix
 
 
@@ -475,7 +496,9 @@ class Contentbased_recommendation(Preprocess):
 
 
 class Hybridrecommender_system(Preprocess):
-    def __init__(self, evaluation_list: list[Evaluation], ui_df=None, item_df=None, reuse: Preprocess = None, userprofile: dict = None):
+    def __init__(self, evaluation_list: list[Evaluation], ui_df=None, item_df=None,
+                 reuse: Preprocess = None, userprofile: dict = None, with_pred: str = None,
+                 scalar: int = None, cut_off: int = -1):
         if type(reuse) != type(None):
             self.training_data = reuse.training_data
             self.test_data = reuse.test_data
@@ -494,6 +517,10 @@ class Hybridrecommender_system(Preprocess):
             self.userprofile_dict = userprofile
         else:
             self.userprofile_dict = None
+        if type(with_pred) != type(None):
+            self.scalar = scalar
+            self.ui_matrix = self.__fill_matrix(with_pred)
+        self.__cut_off = cut_off
 
     def __form_pred_dic(self) -> dict:
         assert all([self.predictiondict_list[i].keys() == self.predictiondict_list[i+1].keys()
@@ -502,11 +529,24 @@ class Hybridrecommender_system(Preprocess):
         for key in key_list:
             temp_df_list = []
             for prediction_dict in self.predictiondict_list:
-                temp_df_list.append(pd.DataFrame.from_dict(
-                    dict(prediction_dict[key]), orient='index'))
+                if self.__cut_off != -1:
+                    temp_df_list.append(pd.DataFrame.from_dict(
+                        dict(prediction_dict[key][:self.__cut_off]), orient='index'))
+                else:
+                    temp_df_list.append(pd.DataFrame.from_dict(
+                        dict(prediction_dict[key]), orient='index'))
             # print(key)
             # print(temp_df.head(10))
             yield key, temp_df_list
+
+    def __fill_matrix(self, fill_with):
+        ui_matrix = copy.deepcopy(self.ui_matrix)
+        for key, item in self.predictiondict_list[fill_with].items():
+            temp_df = pd.DataFrame(dict(item), index=[key])
+            temp_df.loc[key, :] *= ((temp_df.loc[key, :]-temp_df.loc[key, :].min())/(
+                temp_df.loc[key, :].max()-temp_df.loc[key, :].min()))*self.scalar
+            ui_matrix.update(temp_df)
+        return ui_matrix
 
     def reset_generator(self):
         self.hybrid_dict = self.__form_pred_dic()
@@ -604,13 +644,15 @@ class Hybridrecommender_system(Preprocess):
                     remain_vector.append(userprofile_dict[id])
             return remain_uid_list, cosine_similarity(remain_vector, [uid_vector])
 
+        def x(bools): return True if bools == False else False
         prediction_list = []
 
         for uid in self.userprofile_dict.keys():
             remain_uid_list, cossim_list = cos_sim_indf(
                 self.userprofile_dict, uid)
-            top_index = np.argsort([-float(i) for i in cossim_list],)[:rank]
-            for iid in self.ui_matrix.columns:
+            top_index = np.argsort([-float(i) for i in cossim_list])[:rank]
+            for iid in self.ui_matrix.columns[[x(bools) for bools in self.ui_matrix.columns.isin(
+                    self.training_data[self.training_data['reviewerID'] == uid]['asin'])]]:
                 prediction = 0
                 summation = 0
                 for index in top_index:
